@@ -15,6 +15,8 @@ use OpenSSLAsymmetricKey;
 use PHPUnit\Framework\Attributes\CoversClass;
 use OpenSSLCertificate;
 
+use function K2gl\PHPUnitFluentAssertions\fact;
+
 #[CoversClass(X5cIssuerKeys::class)]
 final class X5cIssuerKeysTest extends SdJwtVcTestCase
 {
@@ -23,9 +25,11 @@ final class X5cIssuerKeysTest extends SdJwtVcTestCase
 
     public function testResolvesTheLeafKeyFromATrustedChain(): void
     {
+        // arrange
         $pki = self::pki();
         $resolver = new X5cIssuerKeys([$pki['caPem']]);
 
+        // act
         $verifier = $resolver->resolve(null, (object) ['x5c' => [$pki['leafB64'], $pki['caB64']]]);
 
         // End-to-end: an SD-JWT VC signed by the leaf key verifies via x5c.
@@ -34,44 +38,46 @@ final class X5cIssuerKeysTest extends SdJwtVcTestCase
             'vct' => 'urn:example:t',
             'given_name' => Sd::hide('John'),
         ], ['x5c' => [$pki['leafB64'], $pki['caB64']]]);
-
         $verified = (new SdJwtVcVerifier)->verify($credential, new X5cIssuerKeys([$pki['caPem']]));
 
-        self::assertSame('urn:example:t', $verified->vct());
-        self::assertNull($verified->issuer());
+        // assert
+        fact($verified->vct())->is('urn:example:t');
+        fact($verified->issuer())->null();
     }
 
     public function testMissingX5cHeaderFails(): void
     {
-        $this->expectException(IssuerKeyResolutionFailed::class);
-        $this->expectExceptionMessage('x5c');
-
-        (new X5cIssuerKeys([self::pki()['caPem']]))->resolve(null, (object) []);
+        // act + assert
+        fact(static fn () => (new X5cIssuerKeys([self::pki()['caPem']]))->resolve(null, (object) []))
+            ->throws(IssuerKeyResolutionFailed::class, 'x5c');
     }
 
     public function testUntrustedChainFails(): void
     {
+        // arrange
         $pki = self::pki();
         $otherCa = self::makeAuthority('Other CA');
+        $resolver = new X5cIssuerKeys([$otherCa['pem']]);
 
-        $this->expectException(IssuerKeyResolutionFailed::class);
-        $this->expectExceptionMessage('trust anchor');
-
-        (new X5cIssuerKeys([$otherCa['pem']]))->resolve(null, (object) ['x5c' => [$pki['leafB64'], $pki['caB64']]]);
+        // act + assert
+        fact(static fn () => $resolver->resolve(null, (object) ['x5c' => [$pki['leafB64'], $pki['caB64']]]))
+            ->throws(IssuerKeyResolutionFailed::class, 'trust anchor');
     }
 
     public function testGarbageChainFails(): void
     {
-        $this->expectException(IssuerKeyResolutionFailed::class);
+        // arrange
+        $resolver = new X5cIssuerKeys([self::pki()['caPem']]);
 
-        (new X5cIssuerKeys([self::pki()['caPem']]))->resolve(null, (object) ['x5c' => ['bm90IGEgY2VydA==']]);
+        // act + assert
+        fact(static fn () => $resolver->resolve(null, (object) ['x5c' => ['bm90IGEgY2VydA==']]))
+            ->throws(IssuerKeyResolutionFailed::class);
     }
 
     public function testNoAnchorsIsRejectedUpFront(): void
     {
-        $this->expectException(IssuerKeyResolutionFailed::class);
-
-        new X5cIssuerKeys([]);
+        // act + assert
+        fact(static fn () => new X5cIssuerKeys([]))->throws(IssuerKeyResolutionFailed::class);
     }
 
     /**
@@ -89,9 +95,9 @@ final class X5cIssuerKeysTest extends SdJwtVcTestCase
 
         $leafKey = self::newKey();
         $csr = openssl_csr_new(['commonName' => 'https://issuer.example'], $leafKey, ['digest_alg' => 'sha256']);
-        self::assertNotFalse($csr);
+        fact($csr)->notFalse();
         $leafCert = openssl_csr_sign($csr, $ca['cert'], $ca['key'], 365, ['digest_alg' => 'sha256'], 2);
-        self::assertNotFalse($leafCert);
+        fact($leafCert)->notFalse();
         openssl_x509_export($leafCert, $leafPem);
         openssl_pkey_export($leafKey, $leafKeyPem);
 
@@ -111,9 +117,9 @@ final class X5cIssuerKeysTest extends SdJwtVcTestCase
     {
         $key = self::newKey();
         $csr = openssl_csr_new(['commonName' => $commonName], $key, ['digest_alg' => 'sha256']);
-        self::assertNotFalse($csr);
+        fact($csr)->notFalse();
         $cert = openssl_csr_sign($csr, null, $key, 365, ['digest_alg' => 'sha256'], 1);
-        self::assertNotFalse($cert);
+        fact($cert)->notFalse();
         openssl_x509_export($cert, $pem);
 
         return ['key' => $key, 'cert' => $cert, 'pem' => (string) $pem];
@@ -122,14 +128,14 @@ final class X5cIssuerKeysTest extends SdJwtVcTestCase
     private static function newKey(): OpenSSLAsymmetricKey
     {
         $key = openssl_pkey_new(['curve_name' => 'prime256v1', 'private_key_type' => OPENSSL_KEYTYPE_EC]);
-        self::assertNotFalse($key);
+        fact($key)->notFalse();
 
         return $key;
     }
 
     private static function pemToB64Der(string $pem): string
     {
-        self::assertSame(1, preg_match('/-----BEGIN CERTIFICATE-----(.+?)-----END CERTIFICATE-----/s', $pem, $m));
+        fact(preg_match('/-----BEGIN CERTIFICATE-----(.+?)-----END CERTIFICATE-----/s', $pem, $m))->is(1);
 
         return (string) preg_replace('/\s+/', '', $m[1]);
     }

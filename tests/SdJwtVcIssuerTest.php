@@ -13,22 +13,23 @@ use K2gl\SdJwtVc\SdJwtVcVerifier;
 use K2gl\SdJwtVc\Tests\Support\SdJwtVcTestCase;
 use PHPUnit\Framework\Attributes\CoversClass;
 
+use function K2gl\PHPUnitFluentAssertions\fact;
+
 #[CoversClass(SdJwtVcIssuer::class)]
 final class SdJwtVcIssuerTest extends SdJwtVcTestCase
 {
     public function testIssuesAVerifiableCredential(): void
     {
+        // arrange
         $issuer = new SdJwtVcIssuer(self::localSigner());
 
+        // act
         $credential = $issuer->issue([
             'vct' => 'urn:example:identity',
             'iss' => 'https://issuer.example',
             'given_name' => Sd::hide('John'),
             'family_name' => Sd::hide('Doe'),
         ]);
-
-        self::assertSame('dc+sd-jwt', $credential->header()->typ);
-
         $presented = Presentation::of($credential)->disclose('/given_name')->toCompact();
         $verified = (new SdJwtVcVerifier)->verifyPresentation(
             $presented,
@@ -36,66 +37,78 @@ final class SdJwtVcIssuerTest extends SdJwtVcTestCase
             KeyBinding::notRequired(),
         );
 
-        self::assertSame('urn:example:identity', $verified->vct());
-        self::assertSame('John', $verified->claims()['given_name']);
-        self::assertArrayNotHasKey('family_name', $verified->claims());
+        // assert: the credential header
+        fact($credential->header()->typ)->is('dc+sd-jwt');
+
+        // assert: only the disclosed claim is visible after presentation
+        fact($verified->vct())->is('urn:example:identity');
+        fact($verified->claims()['given_name'])->is('John');
+        fact($verified->claims())->arrayNotHasKey('family_name');
     }
 
     public function testExtraHeaderParametersSurvive(): void
     {
+        // arrange
         $issuer = new SdJwtVcIssuer(self::localSigner());
+
+        // act
         $credential = $issuer->issue(['vct' => 'urn:example:t'], ['kid' => 'key-7']);
 
-        self::assertSame('key-7', $credential->header()->kid);
-        self::assertSame('dc+sd-jwt', $credential->header()->typ);
-    }
-
-    public function testMissingVctIsRejected(): void
-    {
-        $issuer = new SdJwtVcIssuer(self::localSigner());
-
-        $this->expectException(InvalidSdJwtVcException::class);
-        $this->expectExceptionMessage('vct');
-
-        $issuer->issue(['iss' => 'https://issuer.example']);
-    }
-
-    public function testHiddenVctIsRejected(): void
-    {
-        $issuer = new SdJwtVcIssuer(self::localSigner());
-
-        $this->expectException(InvalidSdJwtVcException::class);
-
-        $issuer->issue(['vct' => Sd::hide('urn:example:t')]);
-    }
-
-    public function testHiddenProtectedClaimIsRejected(): void
-    {
-        $issuer = new SdJwtVcIssuer(self::localSigner());
-
-        $this->expectException(InvalidSdJwtVcException::class);
-        $this->expectExceptionMessage('status');
-
-        $issuer->issue(['vct' => 'urn:example:t', 'status' => Sd::hide(['x' => 1])]);
-    }
-
-    public function testForeignTypOverrideIsRejected(): void
-    {
-        $issuer = new SdJwtVcIssuer(self::localSigner());
-
-        $this->expectException(InvalidSdJwtVcException::class);
-        $this->expectExceptionMessage('typ');
-
-        $issuer->issue(['vct' => 'urn:example:t'], ['typ' => 'JWT']);
+        // assert
+        fact($credential->header()->kid)->is('key-7');
+        fact($credential->header()->typ)->is('dc+sd-jwt');
     }
 
     public function testDisclosableSubIsAllowed(): void
     {
+        // arrange
         $issuer = new SdJwtVcIssuer(self::localSigner());
-        $credential = $issuer->issue(['vct' => 'urn:example:t', 'sub' => Sd::hide('user-1')]);
 
+        // act
+        $credential = $issuer->issue(['vct' => 'urn:example:t', 'sub' => Sd::hide('user-1')]);
         $verified = (new SdJwtVcVerifier)->verify($credential, self::localVerifier());
 
-        self::assertSame('user-1', $verified->claims()['sub']);
+        // assert
+        fact($verified->claims()['sub'])->is('user-1');
+    }
+
+    public function testMissingVctIsRejected(): void
+    {
+        // arrange
+        $issuer = new SdJwtVcIssuer(self::localSigner());
+
+        // act + assert
+        fact(static fn () => $issuer->issue(['iss' => 'https://issuer.example']))
+            ->throws(InvalidSdJwtVcException::class, 'vct');
+    }
+
+    public function testHiddenVctIsRejected(): void
+    {
+        // arrange
+        $issuer = new SdJwtVcIssuer(self::localSigner());
+
+        // act + assert
+        fact(static fn () => $issuer->issue(['vct' => Sd::hide('urn:example:t')]))
+            ->throws(InvalidSdJwtVcException::class);
+    }
+
+    public function testHiddenProtectedClaimIsRejected(): void
+    {
+        // arrange
+        $issuer = new SdJwtVcIssuer(self::localSigner());
+
+        // act + assert
+        fact(static fn () => $issuer->issue(['vct' => 'urn:example:t', 'status' => Sd::hide(['x' => 1])]))
+            ->throws(InvalidSdJwtVcException::class, 'status');
+    }
+
+    public function testForeignTypOverrideIsRejected(): void
+    {
+        // arrange
+        $issuer = new SdJwtVcIssuer(self::localSigner());
+
+        // act + assert
+        fact(static fn () => $issuer->issue(['vct' => 'urn:example:t'], ['typ' => 'JWT']))
+            ->throws(InvalidSdJwtVcException::class, 'typ');
     }
 }

@@ -16,13 +16,124 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 
+use function K2gl\PHPUnitFluentAssertions\fact;
+
 #[CoversClass(JwtVcIssuerMetadata::class)]
 final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
 {
     #[DataProvider('wellKnownUrls')]
     public function testBuildsTheWellKnownUrl(string $issuer, string $expected): void
     {
-        self::assertSame($expected, JwtVcIssuerMetadata::wellKnownUrl($issuer));
+        // act + assert
+        fact(JwtVcIssuerMetadata::wellKnownUrl($issuer))->is($expected);
+    }
+
+    public function testResolvesTheDraftExampleViaInlineJwks(): void
+    {
+        // arrange
+        $metadata = [
+            'issuer' => self::DRAFT_ISSUER,
+            'jwks' => ['keys' => [self::draftIssuerJwk() + ['kid' => 'doc-signer-05-25-2022']]],
+        ];
+
+        // assert: stub serves the metadata document inline
+        $resolver = new JwtVcIssuerMetadata(
+            $this->httpClient([
+                'https://example.com/.well-known/jwt-vc-issuer/issuer' => $metadata,
+            ]),
+            new Psr17Factory,
+        );
+
+        // act
+        $verifier = new SdJwtVcVerifier(clock: self::DRAFT_CLOCK);
+        $credential = $verifier->verifyPresentation(
+            self::fixture('draft17/presentation-sd-jwt-vc-kb.txt'),
+            $resolver,
+            KeyBinding::required(audience: 'https://example.com/verifier', nonce: '1234567890'),
+        );
+
+        // assert: disclosed claim survives
+        fact($credential->claims()['is_over_65'])->true();
+    }
+
+    public function testResolvesViaJwksUri(): void
+    {
+        // assert: stub serves metadata plus the referenced key set
+        $resolver = new JwtVcIssuerMetadata(
+            $this->httpClient([
+                'https://example.com/.well-known/jwt-vc-issuer/issuer' => [
+                    'issuer' => self::DRAFT_ISSUER,
+                    'jwks_uri' => 'https://keys.example.com/set.jwks',
+                ],
+                'https://keys.example.com/set.jwks' => ['keys' => [self::draftIssuerJwk()]],
+            ]),
+            new Psr17Factory,
+        );
+
+        // act
+        $credential = (new SdJwtVcVerifier(clock: self::DRAFT_CLOCK))->verify(
+            self::fixture('draft17/issuance-sd-jwt-vc.txt'),
+            $resolver,
+        );
+
+        // assert: issuer resolved through the redirect
+        fact($credential->issuer())->is(self::DRAFT_ISSUER);
+    }
+
+    #[DataProvider('invalidIssuers')]
+    public function testRejectsNonHttpsOrQueryIssuers(string $issuer): void
+    {
+        // act + assert
+        fact(static fn () => JwtVcIssuerMetadata::wellKnownUrl($issuer))->throws(IssuerKeyResolutionFailed::class);
+    }
+
+    public function testIssuerMismatchIsRejected(): void
+    {
+        // assert: stub reports a foreign "issuer"
+        $resolver = new JwtVcIssuerMetadata(
+            $this->httpClient([
+                'https://example.com/.well-known/jwt-vc-issuer/issuer' => [
+                    'issuer' => 'https://evil.example.com',
+                    'jwks' => ['keys' => [self::draftIssuerJwk()]],
+                ],
+            ]),
+            new Psr17Factory,
+        );
+
+        // act + assert
+        fact(static fn () => (new SdJwtVcVerifier(clock: self::DRAFT_CLOCK))->verify(
+            self::fixture('draft17/issuance-sd-jwt-vc.txt'),
+            $resolver,
+        ))->throws(IssuerKeyResolutionFailed::class, 'identical');
+    }
+
+    public function testBothJwksAndJwksUriAreRejected(): void
+    {
+        // assert: stub reports both "jwks" and "jwks_uri"
+        $resolver = new JwtVcIssuerMetadata(
+            $this->httpClient([
+                'https://example.com/.well-known/jwt-vc-issuer/issuer' => [
+                    'issuer' => self::DRAFT_ISSUER,
+                    'jwks' => ['keys' => [self::draftIssuerJwk()]],
+                    'jwks_uri' => 'https://keys.example.com/set.jwks',
+                ],
+            ]),
+            new Psr17Factory,
+        );
+
+        // act + assert
+        fact(static fn () => $resolver->resolve(self::DRAFT_ISSUER, (object) []))
+            ->throws(IssuerKeyResolutionFailed::class);
+    }
+
+    public function testHttpErrorIsRejected(): void
+    {
+        // assert: stub 404s every URL
+        $resolver = new JwtVcIssuerMetadata($this->httpClient([]), new Psr17Factory);
+
+        // act + assert
+        fact(static fn () => $resolver->resolve(self::DRAFT_ISSUER, (object) []))
+            ->throws(IssuerKeyResolutionFailed::class, '404');
     }
 
     /**
@@ -45,14 +156,6 @@ final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
         yield 'with port' => ['https://example.com:8443', 'https://example.com:8443/.well-known/jwt-vc-issuer'];
     }
 
-    #[DataProvider('invalidIssuers')]
-    public function testRejectsNonHttpsOrQueryIssuers(string $issuer): void
-    {
-        $this->expectException(IssuerKeyResolutionFailed::class);
-
-        JwtVcIssuerMetadata::wellKnownUrl($issuer);
-    }
-
     /**
      * @return iterable<string, array{string}>
      */
@@ -65,97 +168,6 @@ final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
         yield 'fragment' => ['https://example.com#frag'];
 
         yield 'no host' => ['urn:example:issuer'];
-    }
-
-    public function testResolvesTheDraftExampleViaInlineJwks(): void
-    {
-        $metadata = [
-            'issuer' => self::DRAFT_ISSUER,
-            'jwks' => ['keys' => [self::draftIssuerJwk() + ['kid' => 'doc-signer-05-25-2022']]],
-        ];
-
-        $resolver = new JwtVcIssuerMetadata(
-            $this->httpClient([
-                'https://example.com/.well-known/jwt-vc-issuer/issuer' => $metadata,
-            ]),
-            new Psr17Factory,
-        );
-
-        $verifier = new SdJwtVcVerifier(clock: self::DRAFT_CLOCK);
-        $credential = $verifier->verifyPresentation(
-            self::fixture('draft17/presentation-sd-jwt-vc-kb.txt'),
-            $resolver,
-            KeyBinding::required(audience: 'https://example.com/verifier', nonce: '1234567890'),
-        );
-
-        self::assertTrue($credential->claims()['is_over_65']);
-    }
-
-    public function testResolvesViaJwksUri(): void
-    {
-        $resolver = new JwtVcIssuerMetadata(
-            $this->httpClient([
-                'https://example.com/.well-known/jwt-vc-issuer/issuer' => [
-                    'issuer' => self::DRAFT_ISSUER,
-                    'jwks_uri' => 'https://keys.example.com/set.jwks',
-                ],
-                'https://keys.example.com/set.jwks' => ['keys' => [self::draftIssuerJwk()]],
-            ]),
-            new Psr17Factory,
-        );
-
-        $credential = (new SdJwtVcVerifier(clock: self::DRAFT_CLOCK))->verify(
-            self::fixture('draft17/issuance-sd-jwt-vc.txt'),
-            $resolver,
-        );
-
-        self::assertSame(self::DRAFT_ISSUER, $credential->issuer());
-    }
-
-    public function testIssuerMismatchIsRejected(): void
-    {
-        $resolver = new JwtVcIssuerMetadata(
-            $this->httpClient([
-                'https://example.com/.well-known/jwt-vc-issuer/issuer' => [
-                    'issuer' => 'https://evil.example.com',
-                    'jwks' => ['keys' => [self::draftIssuerJwk()]],
-                ],
-            ]),
-            new Psr17Factory,
-        );
-
-        $this->expectException(IssuerKeyResolutionFailed::class);
-        $this->expectExceptionMessage('identical');
-
-        (new SdJwtVcVerifier(clock: self::DRAFT_CLOCK))->verify(self::fixture('draft17/issuance-sd-jwt-vc.txt'), $resolver);
-    }
-
-    public function testBothJwksAndJwksUriAreRejected(): void
-    {
-        $resolver = new JwtVcIssuerMetadata(
-            $this->httpClient([
-                'https://example.com/.well-known/jwt-vc-issuer/issuer' => [
-                    'issuer' => self::DRAFT_ISSUER,
-                    'jwks' => ['keys' => [self::draftIssuerJwk()]],
-                    'jwks_uri' => 'https://keys.example.com/set.jwks',
-                ],
-            ]),
-            new Psr17Factory,
-        );
-
-        $this->expectException(IssuerKeyResolutionFailed::class);
-
-        $resolver->resolve(self::DRAFT_ISSUER, (object) []);
-    }
-
-    public function testHttpErrorIsRejected(): void
-    {
-        $resolver = new JwtVcIssuerMetadata($this->httpClient([]), new Psr17Factory);
-
-        $this->expectException(IssuerKeyResolutionFailed::class);
-        $this->expectExceptionMessage('404');
-
-        $resolver->resolve(self::DRAFT_ISSUER, (object) []);
     }
 
     /**
