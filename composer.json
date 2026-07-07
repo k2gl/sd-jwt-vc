@@ -1,6 +1,6 @@
 {
   "name": "k2gl/sd-jwt-vc",
-  "description": "SD-JWT-based Verifiable Credentials (SD-JWT VC) in pure PHP: issue and verify dc+sd-jwt credentials.",
+  "description": "SD-JWT-based Verifiable Credentials (SD-JWT VC) in pure PHP: issue and verify dc+sd-jwt credentials",
   "homepage": "https://github.com/k2gl/sd-jwt-vc",
   "type": "library",
   "license": "MIT",
