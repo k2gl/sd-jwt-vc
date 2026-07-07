@@ -9,19 +9,27 @@ use K2gl\SdJwtVc\StaticIssuerKeys;
 use K2gl\SdJwtVc\Tests\Support\SdJwtVcTestCase;
 use PHPUnit\Framework\Attributes\CoversClass;
 
+use function K2gl\PHPUnitFluentAssertions\fact;
+
 #[CoversClass(StaticIssuerKeys::class)]
 final class StaticIssuerKeysTest extends SdJwtVcTestCase
 {
     public function testResolvesADirectVerifier(): void
     {
+        // arrange
         $verifier = self::draftIssuerVerifier();
         $keys = (new StaticIssuerKeys)->add('https://issuer.example', $verifier);
 
-        self::assertSame($verifier, $keys->resolve('https://issuer.example', (object) []));
+        // act
+        $resolved = $keys->resolve('https://issuer.example', (object) []);
+
+        // assert
+        fact($resolved)->is($verifier);
     }
 
     public function testSelectsFromAJwkSetByKid(): void
     {
+        // arrange
         $keys = (new StaticIssuerKeys)->addJwks('https://issuer.example', [
             'keys' => [
                 ['kid' => 'other', 'kty' => 'EC', 'crv' => 'P-256', 'x' => 'AA', 'y' => 'AA'],
@@ -29,55 +37,63 @@ final class StaticIssuerKeysTest extends SdJwtVcTestCase
             ],
         ]);
 
+        // act
         $verifier = $keys->resolve('https://issuer.example', (object) ['kid' => 'doc-signer-05-25-2022']);
 
-        // The selected key must be the draft's: it verifies the draft example.
-        self::assertTrue($verifier->verify(...self::draftSignedParts()));
+        // assert: the selected key must be the draft's — it verifies the draft example
+        fact($verifier->verify(...self::draftSignedParts()))->true();
     }
 
     public function testSingleKeySetNeedsNoKid(): void
     {
+        // arrange
         $keys = (new StaticIssuerKeys)->addJwks('https://issuer.example', [
             'keys' => [self::draftIssuerJwk()],
         ]);
 
-        self::assertTrue($keys->resolve('https://issuer.example', (object) [])->verify(...self::draftSignedParts()));
+        // act
+        $verifier = $keys->resolve('https://issuer.example', (object) []);
+
+        // assert
+        fact($verifier->verify(...self::draftSignedParts()))->true();
     }
 
     public function testMultipleKeysWithoutKidFail(): void
     {
+        // arrange
         $keys = (new StaticIssuerKeys)->addJwks('https://issuer.example', [
             'keys' => [self::draftIssuerJwk(), self::draftIssuerJwk() + ['kid' => 'x']],
         ]);
 
-        $this->expectException(IssuerKeyResolutionFailed::class);
-
-        $keys->resolve('https://issuer.example', (object) []);
+        // act + assert
+        fact(static fn () => $keys->resolve('https://issuer.example', (object) []))
+            ->throws(IssuerKeyResolutionFailed::class);
     }
 
     public function testUnknownKidFails(): void
     {
+        // arrange
         $keys = (new StaticIssuerKeys)->addJwks('https://issuer.example', [
             'keys' => [self::draftIssuerJwk() + ['kid' => 'a']],
         ]);
 
-        $this->expectException(IssuerKeyResolutionFailed::class);
-
-        $keys->resolve('https://issuer.example', (object) ['kid' => 'b']);
+        // act + assert
+        fact(static fn () => $keys->resolve('https://issuer.example', (object) ['kid' => 'b']))
+            ->throws(IssuerKeyResolutionFailed::class);
     }
 
     public function testUnknownIssuerFails(): void
     {
-        $this->expectException(IssuerKeyResolutionFailed::class);
-
-        (new StaticIssuerKeys)->resolve('https://issuer.example', (object) []);
+        // act + assert
+        fact(static fn () => (new StaticIssuerKeys)->resolve('https://issuer.example', (object) []))
+            ->throws(IssuerKeyResolutionFailed::class);
     }
 
     public function testNullIssuerFails(): void
     {
-        $this->expectException(IssuerKeyResolutionFailed::class);
-
-        (new StaticIssuerKeys)->resolve(null, (object) []);
+        // act + assert
+        fact(static fn () => (new StaticIssuerKeys)->resolve(null, (object) []))
+            ->throws(IssuerKeyResolutionFailed::class);
     }
 
     /**
@@ -90,7 +106,7 @@ final class StaticIssuerKeysTest extends SdJwtVcTestCase
         $jwt = explode('~', self::fixture('draft17/issuance-sd-jwt-vc.txt'))[0];
         $parts = explode('.', $jwt);
         $signature = base64_decode(strtr($parts[2], '-_', '+/') . str_repeat('=', (4 - strlen($parts[2]) % 4) % 4));
-        self::assertNotFalse($signature);
+        fact($signature)->notFalse();
 
         return [$parts[0] . '.' . $parts[1], $signature];
     }

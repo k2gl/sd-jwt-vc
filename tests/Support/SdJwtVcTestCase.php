@@ -10,6 +10,8 @@ use K2gl\SdJwt\Jws\JwsSigner;
 use K2gl\SdJwtVc\StaticIssuerKeys;
 use PHPUnit\Framework\TestCase;
 
+use function K2gl\PHPUnitFluentAssertions\fact;
+
 abstract class SdJwtVcTestCase extends TestCase
 {
     /** The KB-JWT of the draft example is issued at 1783345758. */
@@ -20,7 +22,7 @@ abstract class SdJwtVcTestCase extends TestCase
     protected static function fixture(string $relativePath): string
     {
         $contents = file_get_contents(__DIR__ . '/../fixtures/' . $relativePath);
-        self::assertNotFalse($contents);
+        fact($contents)->notFalse();
 
         return trim($contents);
     }
@@ -70,10 +72,10 @@ abstract class SdJwtVcTestCase extends TestCase
                 'curve_name' => 'prime256v1',
                 'private_key_type' => OPENSSL_KEYTYPE_EC,
             ]);
-            self::assertNotFalse($resource);
+            fact($resource)->notFalse();
             openssl_pkey_export($resource, $pem);
             $details = openssl_pkey_get_details($resource);
-            self::assertNotFalse($details);
+            fact($details)->notFalse();
 
             $key = ['pem' => (string) $pem, 'public' => (string) $details['key']];
         }
