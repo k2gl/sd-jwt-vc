@@ -24,10 +24,6 @@ jobs:
           coverage: none
           tools: composer:v2
 
-      # Until k2gl/sd-jwt is registered on Packagist; drop afterwards.
-      - name: Register the sd-jwt VCS repository
-        run: composer config repositories.sd-jwt vcs https://github.com/k2gl/sd-jwt
-
       - name: Install Composer dependencies
         run: composer install --no-progress --prefer-dist --optimize-autoloader
 
