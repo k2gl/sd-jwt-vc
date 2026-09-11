@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.0.0
+
+Catches up with draft-ietf-oauth-sd-jwt-vc-19.
+
+- **Breaking:** the verifier no longer accepts the pre-2024 `vc+sd-jwt` typ by default —
+  draft -19 removed the transition period. Pass `acceptLegacyType: true` to keep accepting it.
+- **Breaking:** `JwtVcIssuerMetadata` applies the Section 3 retrieval rules: a document must
+  come back 2xx with `application/json`, redirects are followed at most three times and only
+  to HTTPS URLs, every URL (redirect targets included) is checked by the new `UrlPolicy`
+  against loopback, link-local and private addresses (DNS names are resolved), and the body
+  is read up to 1 MiB. All of it is configurable through the constructor.
+- The `aka_vcts` claim: validated on issuance and verification, protected from selective
+  disclosure, exposed as `VerifiedSdJwtVc::alsoKnownAsTypes()`.
+- Protected claims are protected together with their sub-claims, on both sides (needs
+  k2gl/sd-jwt 1.1 for `disclosedPaths()`).
+- The JWS JSON serialization is accepted wherever a compact string is, via k2gl/sd-jwt 1.1.
+- `composer suggest`s k2gl/token-status-list; the README shows the status check.
+
 ## 1.0.0
 
 - Initial release: SD-JWT-based Verifiable Credentials per draft-ietf-oauth-sd-jwt-vc-17.

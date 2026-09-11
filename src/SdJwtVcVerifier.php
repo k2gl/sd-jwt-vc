@@ -34,8 +34,8 @@ use stdClass;
  */
 final class SdJwtVcVerifier
 {
-    /** Claims that MUST NOT be selectively disclosed (Section 2.2.2.2). */
-    public const PROTECTED_CLAIMS = ['iss', 'nbf', 'exp', 'cnf', 'vct', 'vct#integrity', 'status'];
+    /** Claims that, sub-claims included, MUST NOT be selectively disclosed (Section 2.2.2.2). */
+    public const PROTECTED_CLAIMS = ['iss', 'nbf', 'exp', 'cnf', 'vct', 'vct#integrity', 'aka_vcts', 'status'];
 
     private readonly SdJwtVerifier $inner;
 
@@ -43,14 +43,15 @@ final class SdJwtVcVerifier
      * @param list<string> $allowedAlgorithms
      * @param list<string> $allowedHashAlgorithms
      * @param ?int $clock Unix time for `exp`/`nbf`/KB `iat` checks; defaults to time()
-     * @param bool $acceptLegacyType Accept the pre-2024 `vc+sd-jwt` typ alongside `dc+sd-jwt`
+     * @param bool $acceptLegacyType Also accept the pre-2024 `vc+sd-jwt` typ. Draft -19
+     *     dropped the transition period, so this is off by default.
      */
     public function __construct(
         array $allowedAlgorithms = SdJwtVerifier::DEFAULT_ALGORITHMS,
         array $allowedHashAlgorithms = SdJwtVerifier::DEFAULT_HASH_ALGORITHMS,
         ?int $clock = null,
         int $clockLeewaySeconds = 0,
-        private readonly bool $acceptLegacyType = true,
+        private readonly bool $acceptLegacyType = false,
     ) {
         $this->inner = new SdJwtVerifier(
             allowedAlgorithms: $allowedAlgorithms,
@@ -122,7 +123,6 @@ final class SdJwtVcVerifier
     /** The SD-JWT VC payload rules of Section 2.2.2. */
     private function checked(SdJwt $sdJwtVc, VerifiedSdJwt $verified): VerifiedSdJwtVc
     {
-        $raw = get_object_vars($sdJwtVc->payload());
         $processed = get_object_vars($verified->payload());
 
         $vct = $processed['vct'] ?? null;
@@ -131,15 +131,41 @@ final class SdJwtVcVerifier
             throw new InvalidSdJwtVcException('The required "vct" claim is missing or not a string.');
         }
 
-        foreach (self::PROTECTED_CLAIMS as $claim) {
-            if (array_key_exists($claim, $processed) && ! array_key_exists($claim, $raw)) {
-                throw new InvalidSdJwtVcException(sprintf(
-                    'The "%s" claim must not be selectively disclosed.',
-                    $claim,
-                ));
+        if (array_key_exists('aka_vcts', $processed)) {
+            self::assertTypeList($processed['aka_vcts']);
+        }
+
+        foreach ($verified->disclosedPaths() as $path) {
+            foreach (self::PROTECTED_CLAIMS as $claim) {
+                if ($path === '/' . $claim || str_starts_with($path, '/' . $claim . '/')) {
+                    throw new InvalidSdJwtVcException(sprintf(
+                        'The "%s" claim and its sub-claims must not be selectively disclosed (found "%s").',
+                        $claim,
+                        $path,
+                    ));
+                }
             }
         }
 
         return new VerifiedSdJwtVc($verified);
+    }
+
+    /**
+     * `aka_vcts` (Section 2.2.2.2): additional credential types, a list of
+     * non-empty strings.
+     *
+     * @internal shared with the issuer
+     */
+    public static function assertTypeList(mixed $value): void
+    {
+        if (! is_array($value) || ! array_is_list($value)) {
+            throw new InvalidSdJwtVcException('The "aka_vcts" claim must be an array of credential types.');
+        }
+
+        foreach ($value as $type) {
+            if (! is_string($type) || $type === '') {
+                throw new InvalidSdJwtVcException('The "aka_vcts" claim must be an array of non-empty strings.');
+            }
+        }
     }
 }

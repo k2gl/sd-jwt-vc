@@ -14,6 +14,7 @@ use K2gl\SdJwtVc\StaticIssuerKeys;
 use K2gl\SdJwtVc\Tests\Support\SdJwtVcTestCase;
 use K2gl\SdJwtVc\VerifiedSdJwtVc;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function K2gl\PHPUnitFluentAssertions\fact;
 
@@ -75,17 +76,56 @@ final class SdJwtVcVerifierTest extends SdJwtVcTestCase
         fact($credential->vct())->is('https://credentials.example.com/identity_credential');
     }
 
-    public function testLegacyTypIsAcceptedByDefault(): void
+    public function testLegacyTypIsRejectedByDefault(): void
+    {
+        // arrange: draft -19 ended the vc+sd-jwt transition period
+        $issuer = new SdJwtIssuer(self::localSigner());
+        $sdJwt = $issuer->issue(['vct' => 'urn:example:t'], ['typ' => 'vc+sd-jwt']);
+
+        // act + assert
+        fact(fn () => $this->verifier()->verify($sdJwt, self::localVerifier()))
+            ->throws(InvalidSdJwtVcException::class, 'must be "dc+sd-jwt", got "vc+sd-jwt"');
+    }
+
+    public function testExposesAdditionalTypes(): void
     {
         // arrange
         $issuer = new SdJwtIssuer(self::localSigner());
-        $sdJwt = $issuer->issue(['vct' => 'urn:example:t'], ['typ' => 'vc+sd-jwt']);
+        $sdJwt = $issuer->issue(
+            ['vct' => 'urn:example:t', 'aka_vcts' => ['urn:example:t-v1', 'urn:example:legacy']],
+            ['typ' => 'dc+sd-jwt'],
+        );
 
         // act
         $credential = $this->verifier()->verify($sdJwt, self::localVerifier());
 
         // assert
-        fact($credential->vct())->is('urn:example:t');
+        fact($credential->alsoKnownAsTypes())->is(['urn:example:t-v1', 'urn:example:legacy']);
+    }
+
+    #[DataProvider('malformedTypeLists')]
+    public function testRejectsMalformedAdditionalTypes(mixed $akaVcts, string $message): void
+    {
+        // arrange
+        $issuer = new SdJwtIssuer(self::localSigner());
+        $sdJwt = $issuer->issue(['vct' => 'urn:example:t', 'aka_vcts' => $akaVcts], ['typ' => 'dc+sd-jwt']);
+
+        // act + assert
+        fact(fn () => $this->verifier()->verify($sdJwt, self::localVerifier()))
+            ->throws(InvalidSdJwtVcException::class, $message);
+    }
+
+    /**
+     * @return array<string, array{mixed, string}>
+     */
+    public static function malformedTypeLists(): array
+    {
+        return [
+            'string'        => ['urn:example:t', 'must be an array of credential types'],
+            'object'        => [['a' => 'b'], 'must be an array of credential types'],
+            'empty element' => [[''], 'must be an array of non-empty strings'],
+            'number'        => [[1], 'must be an array of non-empty strings'],
+        ];
     }
 
     public function testStatusClaimIsExposed(): void
@@ -125,15 +165,17 @@ final class SdJwtVcVerifierTest extends SdJwtVcTestCase
             ->throws(InvalidSdJwtVcException::class, 'typ');
     }
 
-    public function testLegacyTypCanBeRefused(): void
+    public function testLegacyTypCanBeAcceptedOnRequest(): void
     {
         // arrange
         $issuer = new SdJwtIssuer(self::localSigner());
         $sdJwt = $issuer->issue(['vct' => 'urn:example:t'], ['typ' => 'vc+sd-jwt']);
 
-        // act + assert
-        fact(fn () => $this->verifier(acceptLegacyType: false)->verify($sdJwt, self::localVerifier()))
-            ->throws(InvalidSdJwtVcException::class);
+        // act
+        $credential = $this->verifier(acceptLegacyType: true)->verify($sdJwt, self::localVerifier());
+
+        // assert
+        fact($credential->vct())->is('urn:example:t');
     }
 
     public function testMissingVctIsRejected(): void
@@ -162,6 +204,20 @@ final class SdJwtVcVerifierTest extends SdJwtVcTestCase
             ->throws(InvalidSdJwtVcException::class, 'exp');
     }
 
+    public function testSelectivelyDisclosedSubClaimOfAProtectedClaimIsRejected(): void
+    {
+        // arrange: cnf itself is in the clear, its jwk member is not
+        $issuer = new SdJwtIssuer(self::localSigner());
+        $sdJwt = $issuer->issue(
+            ['vct' => 'urn:example:t', 'cnf' => ['jwk' => Sd::hide(['kty' => 'EC'])]],
+            ['typ' => 'dc+sd-jwt'],
+        );
+
+        // act + assert
+        fact(fn () => $this->verifier()->verify($sdJwt, self::localVerifier()))
+            ->throws(InvalidSdJwtVcException::class, '"cnf" claim and its sub-claims must not be selectively disclosed (found "/cnf/jwk")');
+    }
+
     public function testSelectivelyDisclosedVctIsRejected(): void
     {
         // arrange
@@ -173,7 +229,7 @@ final class SdJwtVcVerifierTest extends SdJwtVcTestCase
             ->throws(InvalidSdJwtVcException::class);
     }
 
-    private function verifier(bool $acceptLegacyType = true): SdJwtVcVerifier
+    private function verifier(bool $acceptLegacyType = false): SdJwtVcVerifier
     {
         return new SdJwtVcVerifier(clock: self::DRAFT_CLOCK, acceptLegacyType: $acceptLegacyType);
     }
