@@ -23,6 +23,19 @@ final class VerifiedSdJwtVc
         return is_string($vct) ? $vct : '';
     }
 
+    /**
+     * Additional credential types the credential is also known as (`aka_vcts`).
+     *
+     * @return list<string>
+     */
+    public function alsoKnownAsTypes(): array
+    {
+        $types = get_object_vars($this->inner->payload())['aka_vcts'] ?? [];
+
+        /** @var list<string> */
+        return is_array($types) ? array_values($types) : [];
+    }
+
     /** The `iss` claim, when present (may be conveyed via x5c instead). */
     public function issuer(): ?string
     {
@@ -31,7 +44,10 @@ final class VerifiedSdJwtVc
         return is_string($issuer) ? $issuer : null;
     }
 
-    /** The `status` claim for a status mechanism such as Token Status List. */
+    /**
+     * The `status` claim, for a status mechanism such as Token Status List
+     * (k2gl/token-status-list reads it with `StatusReference::fromClaim()`).
+     */
     public function status(): ?stdClass
     {
         $status = get_object_vars($this->inner->payload())['status'] ?? null;

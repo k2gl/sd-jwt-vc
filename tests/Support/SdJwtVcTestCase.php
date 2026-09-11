@@ -8,6 +8,7 @@ use K2gl\Dsse\PublicKey;
 use K2gl\Dsse\Verifier;
 use K2gl\SdJwt\Jws\JwsSigner;
 use K2gl\SdJwtVc\StaticIssuerKeys;
+use K2gl\SdJwtVc\UrlPolicy;
 use PHPUnit\Framework\TestCase;
 
 use function K2gl\PHPUnitFluentAssertions\fact;
@@ -18,6 +19,12 @@ abstract class SdJwtVcTestCase extends TestCase
     protected const DRAFT_CLOCK = 1783345800;
 
     protected const DRAFT_ISSUER = 'https://example.com/issuer';
+
+    /** The Section 7.1 checks without DNS: the stubs never leave the process. */
+    protected static function urlPolicy(): UrlPolicy
+    {
+        return new UrlPolicy(resolveHosts: false);
+    }
 
     protected static function fixture(string $relativePath): string
     {

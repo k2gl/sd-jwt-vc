@@ -13,10 +13,9 @@ Identity Wallet build on. RFC 9901 processing is provided by
 [k2gl/sd-jwt](https://github.com/k2gl/sd-jwt); this package adds the credential layer:
 the `typ`/`vct` rules, the protected-claims rules, and Issuer key discovery.
 
-Tracks **draft -17** (at the IESG for publication). The test suite verifies the draft's own
-worked examples byte for byte. The most churn-prone surface across draft revisions has been
-the media type; the verifier accepts both `dc+sd-jwt` and the pre-2024 `vc+sd-jwt`
-(switchable off).
+Tracks **draft -19** (in IETF Last Call). The test suite verifies the draft's own worked
+examples byte for byte. The `typ` is `dc+sd-jwt`; the pre-2024 `vc+sd-jwt` is refused unless
+you opt in (`acceptLegacyType: true`) — draft -19 ended the transition period.
 
 ## Install
 
@@ -81,19 +80,64 @@ $compact = $credential->toCompact();
 
 The `typ` header is always `dc+sd-jwt`; `vct` is required; the claims that the draft
 forbids disclosing selectively (`iss`, `nbf`, `exp`, `cnf`, `vct`, `vct#integrity`,
-`status`) are rejected if wrapped in `Sd::hide()` — and rejected again at verification
-time if a foreign issuer tried it.
+`aka_vcts`, `status`) are rejected if wrapped in `Sd::hide()`, sub-claims included — and
+rejected again at verification time if a foreign issuer tried it. `aka_vcts`, the additional
+types a credential is also known as, is validated on both sides and read back with
+`$credential->alsoKnownAsTypes()`.
 
 Presentation building (selecting disclosures, Key Binding) is the Holder side and lives in
 k2gl/sd-jwt's `Presentation`.
 
+### Fetching metadata safely
+
+`JwtVcIssuerMetadata` dereferences URLs derived from the credential's `iss` claim, so it
+follows the draft's Section 3 retrieval rules rather than trusting the network: a document
+counts only when the response is 2xx *and* `application/json`; redirects are followed by
+hand (three at most) so that every hop, like the original URL, passes the `UrlPolicy` —
+HTTPS only, no loopback, link-local or private address, and DNS names resolved and checked
+the same way; the body is read up to a size limit (1 MiB by default). Time limits are the
+PSR-18 client's job — configure its timeout. Tune the policy per deployment:
+
+```php
+new JwtVcIssuerMetadata(
+    $psr18Client,
+    $psr17RequestFactory,
+    urlPolicy: new UrlPolicy(resolveHosts: false), // e.g. behind an egress proxy that enforces this itself
+    maxRedirects: 1,
+    maxBytes: 256 * 1024,
+);
+```
+
+### Check revocation
+
+A verified credential can still have been revoked. The draft's status mechanism is the
+Token Status List, and it requires the Status List Token to be a JWT — which is what
+[k2gl/token-status-list](https://github.com/k2gl/token-status-list) implements:
+
+```php
+use K2gl\TokenStatusList\StatusListResolver;
+use K2gl\TokenStatusList\StatusReference;
+
+$status = $credential->status();
+
+if ($status !== null) {
+    $resolver = new StatusListResolver($psr18Client, $psr17RequestFactory, $statusIssuerKey, cache: $psr16Cache);
+
+    if (! $resolver->check(StatusReference::fromClaim($status))->isValid()) {
+        // revoked or suspended
+    }
+}
+```
+
 ## Scope
 
-- `dc+sd-jwt` issuance and verification per draft -17, compact serialization.
-- Key discovery: JWT VC Issuer Metadata (PSR-18), x5c chains, pinned keys.
-- `status` claim surfaced for a status-mechanism check by the application; a Token Status
-  List implementation is a separate concern.
-- Type Metadata (Section 4: display, claim metadata, `vct#integrity`) is not implemented —
+- `dc+sd-jwt` issuance and verification per draft -19, compact and JWS JSON serialization
+  (via k2gl/sd-jwt 1.1).
+- Key discovery: JWT VC Issuer Metadata (PSR-18, Section 3 retrieval rules), x5c chains,
+  pinned keys.
+- `status` claim surfaced for the check; the Token Status List itself is
+  k2gl/token-status-list.
+- Type Metadata (Section 5: display, claim metadata, `vct#integrity`) is not implemented —
   it is wallet-display machinery, not needed to issue or verify.
 
 ## License

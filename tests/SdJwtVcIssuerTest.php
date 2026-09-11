@@ -102,6 +102,32 @@ final class SdJwtVcIssuerTest extends SdJwtVcTestCase
             ->throws(InvalidSdJwtVcException::class, 'status');
     }
 
+    public function testHiddenSubClaimOfAProtectedClaimIsRejected(): void
+    {
+        // arrange
+        $issuer = new SdJwtVcIssuer(self::localSigner());
+
+        // act + assert
+        fact(static fn () => $issuer->issue(['vct' => 'urn:example:t', 'cnf' => ['jwk' => Sd::hide(['kty' => 'EC'])]]))
+            ->throws(InvalidSdJwtVcException::class, '"cnf" claim and its sub-claims');
+    }
+
+    public function testAdditionalTypesAreValidated(): void
+    {
+        // arrange
+        $issuer = new SdJwtVcIssuer(self::localSigner());
+
+        // act
+        $credential = $issuer->issue(['vct' => 'urn:example:t', 'aka_vcts' => ['urn:example:legacy']]);
+
+        // assert: carried in the clear
+        fact($credential->payload()->aka_vcts)->is(['urn:example:legacy']);
+
+        // assert: malformed lists are refused at issuance
+        fact(static fn () => $issuer->issue(['vct' => 'urn:example:t', 'aka_vcts' => 'urn:example:legacy']))
+            ->throws(InvalidSdJwtVcException::class, 'must be an array of credential types');
+    }
+
     public function testForeignTypOverrideIsRejected(): void
     {
         // arrange

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace K2gl\SdJwtVc\Tests;
 
+use K2gl\Dsse\Verifier;
 use K2gl\SdJwt\KeyBinding;
 use K2gl\SdJwtVc\Exception\IssuerKeyResolutionFailed;
 use K2gl\SdJwtVc\JwtVcIssuerMetadata;
@@ -42,6 +43,7 @@ final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
                 'https://example.com/.well-known/jwt-vc-issuer/issuer' => $metadata,
             ]),
             new Psr17Factory,
+            self::urlPolicy(),
         );
 
         // act
@@ -68,6 +70,7 @@ final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
                 'https://keys.example.com/set.jwks' => ['keys' => [self::draftIssuerJwk()]],
             ]),
             new Psr17Factory,
+            self::urlPolicy(),
         );
 
         // act
@@ -98,6 +101,7 @@ final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
                 ],
             ]),
             new Psr17Factory,
+            self::urlPolicy(),
         );
 
         // act + assert
@@ -119,6 +123,7 @@ final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
                 ],
             ]),
             new Psr17Factory,
+            self::urlPolicy(),
         );
 
         // act + assert
@@ -129,11 +134,110 @@ final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
     public function testHttpErrorIsRejected(): void
     {
         // assert: stub 404s every URL
-        $resolver = new JwtVcIssuerMetadata($this->httpClient([]), new Psr17Factory);
+        $resolver = new JwtVcIssuerMetadata($this->httpClient([]), new Psr17Factory, self::urlPolicy());
 
         // act + assert
         fact(static fn () => $resolver->resolve(self::DRAFT_ISSUER, (object) []))
             ->throws(IssuerKeyResolutionFailed::class, '404');
+    }
+
+    public function testFollowsRedirectsToHttpsUrls(): void
+    {
+        // arrange
+        $resolver = $this->resolverWith([
+            self::WELL_KNOWN => new Response(302, ['Location' => 'https://cdn.example.com/issuer-metadata.json']),
+            'https://cdn.example.com/issuer-metadata.json' => self::json(self::inlineMetadata()),
+        ]);
+
+        // act
+        $verifier = $resolver->resolve(self::DRAFT_ISSUER, (object) ['kid' => 'doc-signer-05-25-2022']);
+
+        // assert
+        fact($verifier)->instanceOf(Verifier::class);
+    }
+
+    public function testJsonWithParametersIsAccepted(): void
+    {
+        // arrange
+        $resolver = $this->resolverWith([
+            self::WELL_KNOWN => new Response(200, ['Content-Type' => 'application/json; charset=utf-8'], (string) json_encode(self::inlineMetadata())),
+        ]);
+
+        // act + assert
+        fact($resolver->resolve(self::DRAFT_ISSUER, (object) []))->instanceOf(Verifier::class);
+    }
+
+    #[DataProvider('refusedRetrievals')]
+    public function testRefusesRetrievalsOutsideTheSection3Rules(array $responses, string $message): void
+    {
+        // arrange
+        $resolver = $this->resolverWith($responses);
+
+        // act + assert
+        fact(static fn () => $resolver->resolve(self::DRAFT_ISSUER, (object) []))
+            ->throws(IssuerKeyResolutionFailed::class, $message);
+    }
+
+    /**
+     * @return array<string, array{array<string, Response>, string}>
+     */
+    public static function refusedRetrievals(): array
+    {
+        $metadata = (string) json_encode(self::inlineMetadata());
+
+        return [
+            'redirect to http'         => [[self::WELL_KNOWN => new Response(302, ['Location' => 'http://example.com/meta'])], 'not an HTTPS URL'],
+            'redirect to loopback'     => [[self::WELL_KNOWN => new Response(302, ['Location' => 'https://127.0.0.1/meta'])], 'internal address 127.0.0.1'],
+            'too many redirects'       => [[
+                self::WELL_KNOWN => new Response(301, ['Location' => 'https://example.com/a']),
+                'https://example.com/a' => new Response(301, ['Location' => 'https://example.com/b']),
+                'https://example.com/b' => new Response(301, ['Location' => 'https://example.com/c']),
+                'https://example.com/c' => new Response(301, ['Location' => 'https://example.com/d']),
+            ], 'exceeded 3 redirects'],
+            'redirect without location' => [[self::WELL_KNOWN => new Response(302)], 'HTTP 302'],
+            'server error'             => [[self::WELL_KNOWN => new Response(500, ['Content-Type' => 'application/json'], $metadata)], 'HTTP 500'],
+            'html instead of json'     => [[self::WELL_KNOWN => new Response(200, ['Content-Type' => 'text/html'], $metadata)], 'Expected application/json'],
+            'no content type'          => [[self::WELL_KNOWN => new Response(200, [], $metadata)], 'Expected application/json'],
+            'json array'               => [[self::WELL_KNOWN => new Response(200, ['Content-Type' => 'application/json'], '[1]')], 'not a JSON object'],
+            'empty 204'                => [[self::WELL_KNOWN => new Response(204, ['Content-Type' => 'application/json'])], 'not a JSON object'],
+        ];
+    }
+
+    public function testRefusesDocumentsLargerThanTheLimit(): void
+    {
+        // arrange: a 2 KiB document against a 1 KiB limit
+        $padded = self::inlineMetadata() + ['padding' => str_repeat('x', 2048)];
+        $resolver = new JwtVcIssuerMetadata(
+            $this->httpResponses([self::WELL_KNOWN => self::json($padded)]),
+            new Psr17Factory,
+            self::urlPolicy(),
+            maxBytes: 1024,
+        );
+
+        // act + assert
+        fact(static fn () => $resolver->resolve(self::DRAFT_ISSUER, (object) []))
+            ->throws(IssuerKeyResolutionFailed::class, 'larger than 1024 bytes');
+    }
+
+    public function testSendsAnAcceptHeader(): void
+    {
+        // arrange
+        $seen = [];
+        $client = $this->createMock(ClientInterface::class);
+        $client->method('sendRequest')->willReturnCallback(
+            static function (RequestInterface $request) use (&$seen): Response {
+                $seen[] = $request->getHeaderLine('Accept');
+
+                return self::json(self::inlineMetadata());
+            },
+        );
+        $resolver = new JwtVcIssuerMetadata($client, new Psr17Factory, self::urlPolicy());
+
+        // act
+        $resolver->resolve(self::DRAFT_ISSUER, (object) []);
+
+        // assert
+        fact($seen)->is(['application/json']);
     }
 
     /**
@@ -168,6 +272,50 @@ final class JwtVcIssuerMetadataTest extends SdJwtVcTestCase
         yield 'fragment' => ['https://example.com#frag'];
 
         yield 'no host' => ['urn:example:issuer'];
+    }
+
+    private const WELL_KNOWN = 'https://example.com/.well-known/jwt-vc-issuer/issuer';
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function inlineMetadata(): array
+    {
+        return [
+            'issuer' => self::DRAFT_ISSUER,
+            'jwks' => ['keys' => [self::draftIssuerJwk() + ['kid' => 'doc-signer-05-25-2022']]],
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $document
+     */
+    private static function json(array $document): Response
+    {
+        return new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($document));
+    }
+
+    /**
+     * @param array<string, Response> $responses
+     */
+    private function resolverWith(array $responses): JwtVcIssuerMetadata
+    {
+        return new JwtVcIssuerMetadata($this->httpResponses($responses), new Psr17Factory, self::urlPolicy());
+    }
+
+    /**
+     * A PSR-18 stub serving canned responses per URL (404 otherwise).
+     *
+     * @param array<string, Response> $responses
+     */
+    private function httpResponses(array $responses): ClientInterface
+    {
+        $client = $this->createMock(ClientInterface::class);
+        $client->method('sendRequest')->willReturnCallback(
+            static fn (RequestInterface $request): Response => $responses[(string) $request->getUri()] ?? new Response(404),
+        );
+
+        return $client;
     }
 
     /**
