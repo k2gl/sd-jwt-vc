@@ -108,6 +108,45 @@ new JwtVcIssuerMetadata(
 );
 ```
 
+### Type Metadata
+
+A credential type can publish Type Metadata (Section 5): a human-readable name, display
+and rendering hints for wallets, and per-claim rules — which claims must or must not be
+selectively disclosable (`sd`), which are mandatory. Give the verifier a
+`TypeMetadataResolver` and it processes the metadata for every credential: the `extends`
+chain is resolved (extended types first, circular chains refused), `vct#integrity` and
+`extends#integrity` are checked as W3C SRI digests, and the presentation is validated
+against the effective claim metadata. A credential whose metadata cannot be obtained is
+rejected, as Section 5.7 requires once metadata is part of the policy.
+
+```php
+use K2gl\SdJwtVc\HttpTypeMetadata;
+use K2gl\SdJwtVc\StaticTypeMetadata;
+
+// from the vct URL itself, under the same Section 3 retrieval rules and UrlPolicy
+$verifier = new SdJwtVcVerifier(typeMetadata: new HttpTypeMetadata($psr18Client, $psr17RequestFactory));
+
+// or from documents you hold — a registry, a cache filled ahead of time, non-URL types
+$verifier = new SdJwtVcVerifier(typeMetadata: (new StaticTypeMetadata)->add($vct, $typeMetadataJson));
+
+$credential = $verifier->verifyPresentation($compact, $issuerKeys, $keyBinding);
+
+$metadata = $credential->typeMetadata();   // ResolvedTypeMetadata
+$metadata->claims();                       // ClaimMetadata after extension: path, sd(), mandatory(), display, svgId
+$metadata->display();                      // the display entries of the nearest type that defines any
+$metadata->chain();                        // the documents, the type itself first
+```
+
+What is validated: every claim path must evaluate against the credential (a string
+component on a non-object, or an index on a non-array, is an error), and every claim a
+path selects must be selectively disclosable exactly as its `sd` says — "disclosable"
+meaning directly represented as a Disclosure, not merely inside one; array positions
+count the elements as issued, so a withheld element still satisfies `"sd": "always"`.
+`mandatory` is not checked by a Verifier: the draft forbids reading the absence of a
+selectively disclosable claim from a presentation as the Issuer having left it out.
+Display and rendering metadata are handed out as data; rendering is the wallet's job.
+The draft's own example type (Appendix A.2) is a fixture of the test suite.
+
 ### Check revocation
 
 A verified credential can still have been revoked. The draft's status mechanism is the
@@ -137,8 +176,9 @@ if ($status !== null) {
   pinned keys.
 - `status` claim surfaced for the check; the Token Status List itself is
   k2gl/token-status-list.
-- Type Metadata (Section 5: display, claim metadata, `vct#integrity`) is not implemented —
-  it is wallet-display machinery, not needed to issue or verify.
+- Type Metadata (Section 5): retrieval from the `vct` URL or a local registry, integrity
+  metadata, `extends` chains, claim metadata validation (`sd`); display and rendering
+  metadata as data. Not covered: `mandatory` (a Verifier cannot check it) and rendering.
 
 ## License
 

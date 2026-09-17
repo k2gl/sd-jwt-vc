@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.1.0
+
+- **Type Metadata** (draft -19 Section 5). `SdJwtVcVerifier` takes a `TypeMetadataResolver`
+  and then processes the metadata of every credential it verifies: `HttpTypeMetadata`
+  fetches it from the `vct` URL under the Section 3 retrieval rules (same `UrlPolicy`,
+  redirect and size limits as key discovery), `StaticTypeMetadata` serves documents held
+  locally; `vct#integrity` and `extends#integrity` are checked as W3C SRI digests
+  (Section 6); the `extends` chain is resolved extended-type-first with circular chains
+  refused (Section 7.4); claim metadata is merged per Section 5.6.5, with `sd` fixed to
+  always/never and `mandatory: true` not loosenable by an extension.
+- The presentation is validated against the effective claim metadata: paths are evaluated
+  per Section 5.6.1.2 against the arrays as issued (k2gl/sd-jwt 1.2), and a claim that is
+  not selectively disclosable as its `sd` requires rejects the credential. `mandatory` is
+  left to Holders, as the draft asks of Verifiers.
+- `VerifiedSdJwtVc::typeMetadata()` returns the `ResolvedTypeMetadata` — chain, effective
+  claims, display; `disclosedPaths()` / `undisclosedPaths()` are exposed too.
+- The Section 3 HTTP retrieval moved into a shared internal fetcher; `JwtVcIssuerMetadata`
+  behaves as before.
+- Requires k2gl/sd-jwt ^1.2.
+
 ## 2.0.0
 
 Catches up with draft-ietf-oauth-sd-jwt-vc-19.
