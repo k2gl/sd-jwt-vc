@@ -13,7 +13,20 @@ use stdClass;
  */
 final class VerifiedSdJwtVc
 {
-    public function __construct(private readonly VerifiedSdJwt $inner) {}
+    public function __construct(
+        private readonly VerifiedSdJwt $inner,
+        private readonly ?ResolvedTypeMetadata $typeMetadata = null,
+    ) {}
+
+    /**
+     * The type's Type Metadata with its `extends` chain resolved and the
+     * credential validated against it — when the verifier was given a
+     * {@see TypeMetadataResolver}; null otherwise.
+     */
+    public function typeMetadata(): ?ResolvedTypeMetadata
+    {
+        return $this->typeMetadata;
+    }
 
     /** The Verifiable Credential type (`vct` claim). */
     public function vct(): string
@@ -75,5 +88,26 @@ final class VerifiedSdJwtVc
     public function keyBindingPayload(): ?stdClass
     {
         return $this->inner->keyBindingPayload();
+    }
+
+    /**
+     * JSON Pointers of the claims that arrived through Disclosures, array
+     * positions as issued (see k2gl/sd-jwt).
+     *
+     * @return list<string>
+     */
+    public function disclosedPaths(): array
+    {
+        return $this->inner->disclosedPaths();
+    }
+
+    /**
+     * JSON Pointers, as issued, of the array elements that were not disclosed.
+     *
+     * @return list<string>
+     */
+    public function undisclosedPaths(): array
+    {
+        return $this->inner->undisclosedPaths();
     }
 }

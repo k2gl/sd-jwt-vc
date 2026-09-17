@@ -10,6 +10,7 @@ use K2gl\SdJwt\SdJwt;
 use K2gl\SdJwt\SdJwtVerifier;
 use K2gl\SdJwt\VerifiedSdJwt;
 use K2gl\SdJwtVc\Exception\InvalidSdJwtVcException;
+use K2gl\SdJwtVc\Internal\ClaimMetadataValidator;
 use stdClass;
 
 /**
@@ -31,6 +32,11 @@ use stdClass;
  * $credential->vct();     // e.g. "https://credentials.example.com/identity_credential"
  * $credential->claims();  // the Processed SD-JWT Payload
  * ```
+ *
+ * With a {@see TypeMetadataResolver} the verifier also processes the type's
+ * Type Metadata (Section 5): the `extends` chain is resolved, integrity
+ * metadata checked, and the credential validated against the claim metadata
+ * — a credential whose metadata cannot be obtained is rejected (Section 5.7).
  */
 final class SdJwtVcVerifier
 {
@@ -45,6 +51,8 @@ final class SdJwtVcVerifier
      * @param ?int $clock Unix time for `exp`/`nbf`/KB `iat` checks; defaults to time()
      * @param bool $acceptLegacyType Also accept the pre-2024 `vc+sd-jwt` typ. Draft -19
      *     dropped the transition period, so this is off by default.
+     * @param ?TypeMetadataResolver $typeMetadata Process Type Metadata for every credential
+     *     (Section 5.7); without one, Type Metadata is not looked at.
      */
     public function __construct(
         array $allowedAlgorithms = SdJwtVerifier::DEFAULT_ALGORITHMS,
@@ -52,6 +60,7 @@ final class SdJwtVcVerifier
         ?int $clock = null,
         int $clockLeewaySeconds = 0,
         private readonly bool $acceptLegacyType = false,
+        private readonly ?TypeMetadataResolver $typeMetadata = null,
     ) {
         $this->inner = new SdJwtVerifier(
             allowedAlgorithms: $allowedAlgorithms,
@@ -147,7 +156,18 @@ final class SdJwtVcVerifier
             }
         }
 
-        return new VerifiedSdJwtVc($verified);
+        if ($this->typeMetadata === null) {
+            return new VerifiedSdJwtVc($verified);
+        }
+        $integrity = $processed['vct#integrity'] ?? null;
+
+        if ($integrity !== null && ! is_string($integrity)) {
+            throw new InvalidSdJwtVcException('The "vct#integrity" claim must be a string.');
+        }
+        $typeMetadata = ResolvedTypeMetadata::resolve($this->typeMetadata, $vct, $integrity);
+        ClaimMetadataValidator::validate($verified, $typeMetadata->claims());
+
+        return new VerifiedSdJwtVc($verified, $typeMetadata);
     }
 
     /**
